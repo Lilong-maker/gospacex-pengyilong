@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "./";
+
+message OrderAddReq {
+  int64 UserId = 1;
+  repeated OrderItem List =2;
+}
+message OrderItem {
+  int64  GoodsID = 1;
+  int64 Quantity = 2;
+}
+
+message OrderAddResp {
+  string orderSn = 1;
+  string payUrl = 2;
+  float total = 3;
+}
+
+message NotifyPayReq {
+
+}
+
+
+message NotifyPayResp {
+
+}
+service Order {
+  rpc OrderAdd(OrderAddReq) returns (OrderAddResp);
+  rpc NotifyPay(NotifyPayReq) returns (NotifyPayResp);
+}

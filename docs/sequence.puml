@@ -1,0 +1,113 @@
+@startuml
+!theme plain
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+
+actor "用户" as User
+participant "订单服务\nOrderService" as Order #LightBlue
+participant "库存服务\nInventoryService" as Inventory #LightGreen
+participant "调度服务\nScheduler\n(Delay Queue)" as Scheduler #LightYellow
+database "MySQL\n订单库" as DB #Pink
+database "Redis\n缓存" as Redis #Orange
+
+' 使用方框分组，使结构更清晰
+box "订单创建阶段" #LightBlue
+    User -> Order: ① 提交订单请求
+    activate Order
+    
+    Order -> Inventory: ② 锁定库存
+    activate Inventory
+    Inventory -> Inventory: 检查库存充足性
+    Inventory --> Order: 返回: 库存已锁定
+    deactivate Inventory
+    
+    Order -> DB: ③ 保存订单
+    note right: 状态 = PENDING(待支付)\n创建时间 = now()
+    DB --> Order: 订单ID
+    
+    Order -> Redis: ④ 设置订单过期标记
+    note right: Key: order:{id}:expire\nTTL: 30分钟
+    Redis --> Order: OK
+    
+    Order -> Scheduler: ⑤ 注册超时检查任务
+    note right: 延迟30分钟后执行\n任务类型: CHECK_TIMEOUT
+    Scheduler --> Order: 任务ID
+    
+    Order --> User: ⑥ 返回订单创建成功
+    note right: 返回: 订单号、金额、\n支付截止时间
+    deactivate Order
+end box
+
+|||
+
+box "超时检查阶段 (30分钟后)" #LightYellow
+    Scheduler -> Scheduler: 时间到达，触发任务
+    
+    Scheduler -> Order: ⑦ 检查订单状态
+    activate Order
+    Order -> DB: ⑧ 查询订单当前状态
+    DB --> Order: 返回: PENDING(未支付)
+    Order --> Scheduler: 状态: 未支付
+    deactivate Order
+end box
+
+|||
+
+box "自动关单与库存回滚" #LightCoral
+    Scheduler -> Order: ⑨ 执行订单取消
+    activate Order
+    
+    Order -> DB: ⑩ 更新订单状态
+    note right: 状态 = CANCELLED(已取消)\n取消原因 = TIMEOUT
+    DB --> Order: OK
+    
+    Order -> Inventory: ⑪ 释放库存
+    activate Inventory
+    Inventory -> Inventory: 恢复可用库存
+    Inventory --> Order: 返回: 库存已释放
+    deactivate Inventory
+    
+    Order -> Redis: ⑫ 删除过期标记
+    Redis --> Order: OK
+    
+    Order -> Scheduler: ⑬ 确认任务完成
+    Scheduler --> Order: 已移除
+    deactivate Order
+end box
+
+||50||
+
+== 替代流程: 用户成功支付 ==
+
+box "支付成功流程" #LightGreen
+    User -> Order: ⑭ 支付订单
+    activate Order
+    
+    Order -> DB: ⑮ 更新订单状态
+    note right: 状态 = PAID(已支付)\n支付时间 = now()
+    DB --> Order: OK
+    
+    Order -> Redis: ⑯ 删除过期标记
+    Redis --> Order: OK
+    
+    Order -> Scheduler: ⑰ 取消超时检查任务
+    note right: 移除延迟队列中的\n该订单检查任务
+    Scheduler --> Order: 已取消
+    
+    Order --> User: ⑱ 支付成功确认
+    deactivate Order
+end box
+
+legend right
+    |= 颜色 |= 含义 |
+    | <#LightBlue> | 订单服务相关 |
+    | <#LightGreen> | 库存服务相关 |
+    | <#LightYellow> | 调度/定时任务 |
+    | <#Pink> | 数据库操作 |
+    | <#LightCoral> | 取消/回滚操作 |
+endlegend
+
+@enduml
